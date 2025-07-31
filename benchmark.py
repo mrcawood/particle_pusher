@@ -60,6 +60,13 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
         
         # Update animation if enabled
         if animate:
+            # Re-center the view on the center of mass
+            center_of_mass = np.mean(positions, axis=0)
+            view_width = ax.get_xlim()[1] - ax.get_xlim()[0]
+            view_height = ax.get_ylim()[1] - ax.get_ylim()[0]
+            ax.set_xlim(center_of_mass[0] - view_width / 2, center_of_mass[0] + view_width / 2)
+            ax.set_ylim(center_of_mass[1] - view_height / 2, center_of_mass[1] + view_height / 2)
+
             scatter.set_offsets(positions[:, :2])
             plt.draw()
             plt.pause(0.001)  # Minimal pause just for GUI events

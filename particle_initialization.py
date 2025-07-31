@@ -99,7 +99,28 @@ def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, r
         
         # Add rotational velocity component v_rot = omega x r
         rotational_velocities = np.cross(omega_vector, positions)
-        velocities += rotational_velocities
+
+        # Correct for the added kinetic energy to maintain stability (virial equilibrium)
+        # T_new = T_rand + T_rot. We need 2*T_new + U = 0.
+        # Original system had 2*T_rand + U = 0 => U = -2*T_rand
+        # So we need 2*(T_new_rand + T_rot) - 2*T_rand = 0
+        # T_new_rand = T_rand - T_rot
+        # Since T is proportional to v^2, the new random velocities need to be scaled
+        # by sqrt((T_rand - T_rot) / T_rand) = sqrt(1 - T_rot / T_rand)
+        
+        t_rand = 0.5 * np.sum(masses[:, np.newaxis] * velocities**2)
+        t_rot = 0.5 * np.sum(masses[:, np.newaxis] * rotational_velocities**2)
+
+        if t_rot >= t_rand:
+            print("Warning: Rotation is too high for a stable system. Clamping rotation.")
+            # Clamp rotational energy to be less than random kinetic energy
+            scale_rot = np.sqrt((t_rand * 0.5) / t_rot)
+            rotational_velocities *= scale_rot
+            t_rot = 0.5 * t_rand
+        
+        alpha = np.sqrt(1.0 - t_rot / t_rand)
+        velocities *= alpha  # Scale down random velocities
+        velocities += rotational_velocities # Add rotational velocities
 
     # Center the system
     positions -= np.mean(positions, axis=0)
