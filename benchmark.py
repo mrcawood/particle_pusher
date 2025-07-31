@@ -18,14 +18,19 @@ def initialize_particles(num_particles):
     masses = np.random.rand(num_particles) + 0.1
     return positions, velocities, masses
 
-def run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, G, kernel_name, num_particles, animate=False):
+def run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, G, 
+                   kernel_name, num_particles, animate=False, particle_size=0.5, 
+                   particle_alpha=0.7):
     """
     Run the simulation with optional animation.
     """
     if animate:
         # Set up the plot for animation
         fig, ax = plt.subplots()
-        scatter = ax.scatter(positions[:, 0], positions[:, 1], s=0.2, c='k')
+        scatter = ax.scatter(
+            positions[:, 0], positions[:, 1], 
+            s=particle_size, c='k', alpha=particle_alpha
+        )
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         ax.set_title('N-Body Simulation')
@@ -93,7 +98,9 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
 
     print("Simulation finished.")
 
-def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, rotation_factor=0.0, animate=False):
+def main(kernel_name, num_particles, num_steps, init_method='random', 
+         G=1e-4, rotation_factor=0.0, animate=False,
+         particle_size=0.5, particle_alpha=0.7, dt=0.01, scale_radius=1.0):
     """
     Main driver for the N-body simulation benchmark.
     """
@@ -119,14 +126,17 @@ def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, ro
     else:
         raise ValueError(f"Unknown kernel: {kernel_name}")
 
-    dt = 0.01  # Time step
-
     print(f"Initializing {num_particles} particles using '{init_method}' method...")
     if init_method == 'random':
         positions, velocities, masses = initialize_particles(num_particles)
     elif init_method == 'plummer':
         from particle_initialization import initialize_plummer
-        positions, velocities, masses = initialize_plummer(num_particles, G=G, rotation_factor=rotation_factor)
+        positions, velocities, masses = initialize_plummer(
+            num_particles, 
+            scale_radius=scale_radius, 
+            G=G, 
+            rotation_factor=rotation_factor
+        )
     else:
         raise ValueError(f"Unknown initialization method: {init_method}")
 
@@ -146,7 +156,8 @@ def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, ro
         return
     
     print(f"Running simulation for {num_steps} steps...")
-    run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, G, kernel_name, num_particles, animate)
+    run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, G, 
+                   kernel_name, num_particles, animate, particle_size, particle_alpha)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='N-body simulation benchmark driver.')
@@ -167,5 +178,19 @@ if __name__ == "__main__":
     parser.add_argument('--animate', action='store_true',
                         help='Enable real-time animation of the simulation.')
     
+    # Visualization parameters
+    parser.add_argument('--particle-size', type=float, default=0.5,
+                        help='Size of particles in the animation.')
+    parser.add_argument('--particle-alpha', type=float, default=0.7,
+                        help='Opacity of particles in the animation.')
+
+    # Simulation parameters
+    parser.add_argument('--dt', type=float, default=0.01,
+                        help='Time step for the simulation.')
+    parser.add_argument('--scale-radius', type=float, default=1.0,
+                        help='Scale radius for the Plummer model.')
+    
     args = parser.parse_args()
-    main(args.kernel, args.particles, args.steps, args.init_method, args.G, args.rotation, args.animate)
+    main(args.kernel, args.particles, args.steps, args.init_method, 
+         args.G, args.rotation, args.animate, 
+         args.particle_size, args.particle_alpha, args.dt, args.scale_radius)
