@@ -29,8 +29,12 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         ax.set_title('N-Body Simulation')
-        ax.set_xlim(-1, 2)
-        ax.set_ylim(-1, 2)
+        # Dynamically set plot limits based on initial particle positions
+        x_min, x_max = np.min(positions[:, 0]), np.max(positions[:, 0])
+        y_min, y_max = np.min(positions[:, 1]), np.max(positions[:, 1])
+        padding = (max(x_max - x_min, y_max - y_min)) * 0.1
+        ax.set_xlim(x_min - padding, x_max + padding)
+        ax.set_ylim(y_min - padding, y_max + padding)
         plt.ion()  # Turn on interactive mode
         plt.show(block=False)
 
@@ -82,7 +86,7 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
 
     print("Simulation finished.")
 
-def main(kernel_name, num_particles, num_steps, animate=False):
+def main(kernel_name, num_particles, num_steps, init_method='random', animate=False):
     """
     Main driver for the N-body simulation benchmark.
     """
@@ -99,16 +103,28 @@ def main(kernel_name, num_particles, num_steps, animate=False):
     elif kernel_name == 'barnes_hut':
         from kernels.barnes_hut_kernel import calculate_forces
         print("Using Barnes-Hut kernel.")
+    elif kernel_name == 'cuda_bh':
+        from kernels.cuda_bh_kernel import calculate_forces
+        print("Using CUDA Barnes-Hut (hybrid) kernel.")
+    elif kernel_name == 'cuda_full_bh':
+        from kernels.cuda_full_bh_kernel import calculate_forces
+        print("Using CUDA Barnes-Hut (full GPU) kernel.")
     else:
         raise ValueError(f"Unknown kernel: {kernel_name}")
 
     dt = 0.01  # Time step
 
-    print(f"Initializing {num_particles} particles...")
-    positions, velocities, masses = initialize_particles(num_particles)
+    print(f"Initializing {num_particles} particles using '{init_method}' method...")
+    if init_method == 'random':
+        positions, velocities, masses = initialize_particles(num_particles)
+    elif init_method == 'plummer':
+        from particle_initialization import initialize_plummer
+        positions, velocities, masses = initialize_plummer(num_particles)
+    else:
+        raise ValueError(f"Unknown initialization method: {init_method}")
 
-    # For JIT kernels, perform a warm-up run
-    if 'numba' in kernel_name:
+    # For JIT kernels, perform a warm-up run, but not for plummer
+    if 'numba' in kernel_name and not init_method == 'plummer':
         print("Performing initial run for Numba JIT compilation...")
         calculate_forces(positions, masses, G=1e-4, epsilon=1e-3)
         print("Compilation complete.")
@@ -128,14 +144,17 @@ def main(kernel_name, num_particles, num_steps, animate=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='N-body simulation benchmark driver.')
     parser.add_argument('--kernel', type=str, required=True, 
-                        choices=['numpy', 'numba_serial', 'numba_parallel', 'barnes_hut'],
+                        choices=['numpy', 'numba_serial', 'numba_parallel', 'barnes_hut', 'cuda_bh', 'cuda_full_bh'],
                         help='The computational kernel to use.')
     parser.add_argument('--particles', type=int, default=1000, 
                         help='Number of particles to simulate.')
     parser.add_argument('--steps', type=int, default=20, 
                         help='Number of simulation steps to run.')
+    parser.add_argument('--init-method', type=str, default='random',
+                        choices=['random', 'plummer'],
+                        help='Method for initializing particle positions and velocities.')
     parser.add_argument('--animate', action='store_true',
                         help='Enable real-time animation of the simulation.')
     
     args = parser.parse_args()
-    main(args.kernel, args.particles, args.steps, args.animate)
+    main(args.kernel, args.particles, args.steps, args.init_method, args.animate)

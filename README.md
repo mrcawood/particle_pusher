@@ -30,6 +30,9 @@ python benchmark.py --kernel numba_parallel --particles 1000 --steps 20
 # Run with the advanced Barnes-Hut algorithm for a large number of particles
 python benchmark.py --kernel barnes_hut --particles 20000 --steps 20
 
+# Run with the hybrid CPU/GPU Barnes-Hut kernel
+python benchmark.py --kernel cuda_bh --particles 50000 --steps 20
+
 # Run with animation (best with fewer particles to see movement)
 python benchmark.py --kernel barnes_hut --particles 500 --steps 100 --animate
 ```
@@ -65,3 +68,12 @@ This section provides a narrative that can be used for a tutorial presentation, 
 *   **Demonstration:** This is the key takeaway.
     1.  Run `numba_parallel` and `barnes_hut` with a small number of particles (`--particles 1000`). Observe that **Barnes-Hut is slower**. The overhead of building its octree data structure isn't worth it for small `n`.
     2.  Now, run both kernels with a large number of particles (`--particles 20000`). Observe that **Barnes-Hut is now significantly faster**. This perfectly illustrates the concept of algorithmic complexity and crossover points in performance. It's the most powerful optimization we've made.
+
+### Part 5: Hybrid Computing - `cuda_bh`
+
+*   **Kernel:** `kernels/cuda_bh_kernel.py`
+*   **Concept:** This kernel introduces a powerful, real-world HPC concept: **hybrid computing**. Not all parts of a problem are suited for the same processor. Here, we use a hybrid strategy that leverages the strengths of both the CPU and the GPU.
+    *   The complex, sequential task of building the Barnes-Hut octree remains on the **CPU**, where its branching logic is handled efficiently by Numba's JIT compiler.
+    *   The massively parallel task of calculating the forces on thousands of particles is offloaded to the **GPU**. We use Numba's CUDA backend to write a GPU kernel that calculates the force for every particle simultaneously.
+*   **Demonstration:** Run `numba_parallel` and `cuda_bh` with a very large number of particles (`--particles 50000`). The CPU is still doing the smart algorithmic work of building the tree, but the GPU is crushing the number-crunching part of the force calculation. This demonstrates how to use the right tool for the right job to achieve performance that neither the CPU nor the GPU could manage alone.
+

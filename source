@@ -1,0 +1,7 @@
+
+source .venv/bin/activate
+
+ml gcc/13.2.0 openmpi/5.0.5 cuda/12.6 python3_mpi/3.11.8
+
+export CUDA_HOME=$TACC_CUDA_DIR
+export LD_LIBRARY_PATH=$CUDA_HOME/nvvm/lib64:$LD_LIBRARY_PATH
