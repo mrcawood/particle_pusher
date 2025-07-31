@@ -3,7 +3,7 @@ Provides functions for generating initial conditions for N-body simulations.
 """
 import numpy as np
 
-def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, random_seed=None):
+def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, rotation_factor=0.0, random_seed=None):
     """
     Generates particle positions and velocities for a Plummer model.
 
@@ -16,6 +16,10 @@ def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, r
                               parameter defines the characteristic size of the
                               cluster core.
         total_mass (float): The total mass of the particle system.
+        G (float): The gravitational constant.
+        rotation_factor (float): A factor to control the amount of solid-body
+                                 rotation added to the system. 0 means no
+                                 rotation, > 0 adds rotation around the z-axis.
         random_seed (int, optional): Seed for the random number generator for
                                      reproducibility.
 
@@ -87,6 +91,15 @@ def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, r
     vz = vel_magnitudes * np.cos(theta_v)
 
     velocities = np.vstack([vx, vy, vz]).T
+
+    # 4. Add solid-body rotation around the z-axis
+    if rotation_factor > 0:
+        # Define an angular velocity vector (e.g., rotating around the z-axis)
+        omega_vector = np.array([0, 0, rotation_factor])
+        
+        # Add rotational velocity component v_rot = omega x r
+        rotational_velocities = np.cross(omega_vector, positions)
+        velocities += rotational_velocities
 
     # Center the system
     positions -= np.mean(positions, axis=0)

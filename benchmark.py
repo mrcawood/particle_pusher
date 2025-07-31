@@ -86,7 +86,7 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
 
     print("Simulation finished.")
 
-def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, animate=False):
+def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, rotation_factor=0.0, animate=False):
     """
     Main driver for the N-body simulation benchmark.
     """
@@ -119,7 +119,7 @@ def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, an
         positions, velocities, masses = initialize_particles(num_particles)
     elif init_method == 'plummer':
         from particle_initialization import initialize_plummer
-        positions, velocities, masses = initialize_plummer(num_particles, G=G)
+        positions, velocities, masses = initialize_plummer(num_particles, G=G, rotation_factor=rotation_factor)
     else:
         raise ValueError(f"Unknown initialization method: {init_method}")
 
@@ -152,6 +152,8 @@ if __name__ == "__main__":
                         help='Number of simulation steps to run.')
     parser.add_argument('--G', type=float, default=1e-4,
                         help='Gravitational constant.')
+    parser.add_argument('--rotation', type=float, default=0.0,
+                        help='Rotation factor for the Plummer model.')
     parser.add_argument('--init-method', type=str, default='random',
                         choices=['random', 'plummer'],
                         help='Method for initializing particle positions and velocities.')
@@ -159,4 +161,4 @@ if __name__ == "__main__":
                         help='Enable real-time animation of the simulation.')
     
     args = parser.parse_args()
-    main(args.kernel, args.particles, args.steps, args.init_method, args.G, args.animate)
+    main(args.kernel, args.particles, args.steps, args.init_method, args.G, args.rotation, args.animate)
