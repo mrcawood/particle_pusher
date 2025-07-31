@@ -3,7 +3,7 @@ Provides functions for generating initial conditions for N-body simulations.
 """
 import numpy as np
 
-def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, random_seed=None):
+def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, random_seed=None):
     """
     Generates particle positions and velocities for a Plummer model.
 
@@ -59,8 +59,6 @@ def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, random_s
     # For simplicity in the model, we can set G=1 if we scale units appropriately.
     # Here, we'll use a G that makes sense for the scale. Let M_total = 1, a = 1.
     # We'll set G such that a typical velocity is ~1.
-    # Let's use G = 1 for simplicity, as it can be absorbed into the time step scaling.
-    G = 1.0
     escape_vel_sq = (2 * G * total_mass) / np.sqrt(radii**2 + scale_radius**2)
 
     # Rejection sampling for velocity magnitudes

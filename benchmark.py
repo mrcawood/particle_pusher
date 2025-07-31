@@ -18,7 +18,7 @@ def initialize_particles(num_particles):
     masses = np.random.rand(num_particles) + 0.1
     return positions, velocities, masses
 
-def run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, kernel_name, num_particles, animate=False):
+def run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, G, kernel_name, num_particles, animate=False):
     """
     Run the simulation with optional animation.
     """
@@ -48,7 +48,7 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
         positions += velocities * dt
         
         # Leapfrog Integrator: Kick (update velocity)
-        forces = calculate_forces(positions, masses, G=1e-4, epsilon=1e-3)
+        forces = calculate_forces(positions, masses, G=G, epsilon=1e-3)
         acceleration = forces / masses[:, np.newaxis]
         velocities += acceleration * dt
         
@@ -86,7 +86,7 @@ def run_simulation(positions, velocities, masses, calculate_forces, num_steps, d
 
     print("Simulation finished.")
 
-def main(kernel_name, num_particles, num_steps, init_method='random', animate=False):
+def main(kernel_name, num_particles, num_steps, init_method='random', G=1e-4, animate=False):
     """
     Main driver for the N-body simulation benchmark.
     """
@@ -119,18 +119,18 @@ def main(kernel_name, num_particles, num_steps, init_method='random', animate=Fa
         positions, velocities, masses = initialize_particles(num_particles)
     elif init_method == 'plummer':
         from particle_initialization import initialize_plummer
-        positions, velocities, masses = initialize_plummer(num_particles)
+        positions, velocities, masses = initialize_plummer(num_particles, G=G)
     else:
         raise ValueError(f"Unknown initialization method: {init_method}")
 
     # For JIT kernels, perform a warm-up run, but not for plummer
     if 'numba' in kernel_name and not init_method == 'plummer':
         print("Performing initial run for Numba JIT compilation...")
-        calculate_forces(positions, masses, G=1e-4, epsilon=1e-3)
+        calculate_forces(positions, masses, G=G, epsilon=1e-3)
         print("Compilation complete.")
 
     # Leapfrog Integrator: Initial half-step kick for velocity
-    initial_forces = calculate_forces(positions, masses, G=1e-4, epsilon=1e-3)
+    initial_forces = calculate_forces(positions, masses, G=G, epsilon=1e-3)
     initial_acceleration = initial_forces / masses[:, np.newaxis]
     velocities += initial_acceleration * (dt / 2.0)
 
@@ -139,7 +139,7 @@ def main(kernel_name, num_particles, num_steps, init_method='random', animate=Fa
         return
     
     print(f"Running simulation for {num_steps} steps...")
-    run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, kernel_name, num_particles, animate)
+    run_simulation(positions, velocities, masses, calculate_forces, num_steps, dt, G, kernel_name, num_particles, animate)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='N-body simulation benchmark driver.')
@@ -150,6 +150,8 @@ if __name__ == "__main__":
                         help='Number of particles to simulate.')
     parser.add_argument('--steps', type=int, default=20, 
                         help='Number of simulation steps to run.')
+    parser.add_argument('--G', type=float, default=1e-4,
+                        help='Gravitational constant.')
     parser.add_argument('--init-method', type=str, default='random',
                         choices=['random', 'plummer'],
                         help='Method for initializing particle positions and velocities.')
@@ -157,4 +159,4 @@ if __name__ == "__main__":
                         help='Enable real-time animation of the simulation.')
     
     args = parser.parse_args()
-    main(args.kernel, args.particles, args.steps, args.init_method, args.animate)
+    main(args.kernel, args.particles, args.steps, args.init_method, args.G, args.animate)
