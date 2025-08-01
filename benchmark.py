@@ -122,23 +122,40 @@ def main(kernel_name, num_particles, num_steps, init_method='random',
         print("Using CUDA Barnes-Hut (hybrid) kernel.")
     elif kernel_name == 'cuda_full_bh':
         from kernels.cuda_full_bh_kernel import calculate_forces
+        from kernels.cuda_initialization import initialize_plummer_gpu
         print("Using CUDA Barnes-Hut (full GPU) kernel.")
     else:
         raise ValueError(f"Unknown kernel: {kernel_name}")
 
-    print(f"Initializing {num_particles} particles using '{init_method}' method...")
-    if init_method == 'random':
-        positions, velocities, masses = initialize_particles(num_particles)
-    elif init_method == 'plummer':
-        from particle_initialization import initialize_plummer
-        positions, velocities, masses = initialize_plummer(
-            num_particles, 
-            scale_radius=scale_radius, 
-            G=G, 
+    # For the full CUDA kernel, we can initialize particles directly on the GPU
+    if kernel_name == 'cuda_full_bh' and init_method == 'plummer':
+        print("Initializing particles directly on the GPU...")
+        positions_gpu, velocities_gpu, masses_gpu = initialize_plummer_gpu(
+            num_particles,
+            scale_radius=scale_radius,
+            G=G,
             rotation_factor=rotation_factor
         )
+        # The benchmark driver expects numpy arrays for now, so we transfer them back.
+        # In a pure GPU application, this transfer would be unnecessary.
+        positions = positions_gpu.get()
+        velocities = velocities_gpu.get()
+        masses = masses_gpu.get()
+        
     else:
-        raise ValueError(f"Unknown initialization method: {init_method}")
+        print(f"Initializing {num_particles} particles using '{init_method}' method on CPU...")
+        if init_method == 'random':
+            positions, velocities, masses = initialize_particles(num_particles)
+        elif init_method == 'plummer':
+            from particle_initialization import initialize_plummer
+            positions, velocities, masses = initialize_plummer(
+                num_particles, 
+                scale_radius=scale_radius, 
+                G=G, 
+                rotation_factor=rotation_factor
+            )
+        else:
+            raise ValueError(f"Unknown initialization method: {init_method}")
 
     # For JIT kernels, perform a warm-up run, but not for plummer
     if 'numba' in kernel_name and not init_method == 'plummer':
@@ -147,9 +164,11 @@ def main(kernel_name, num_particles, num_steps, init_method='random',
         print("Compilation complete.")
 
     # Leapfrog Integrator: Initial half-step kick for velocity
-    initial_forces = calculate_forces(positions, masses, G=G, epsilon=1e-3)
-    initial_acceleration = initial_forces / masses[:, np.newaxis]
-    velocities += initial_acceleration * (dt / 2.0)
+    # We skip this for the GPU-initialized data as it's already on the device
+    if not (kernel_name == 'cuda_full_bh' and init_method == 'plummer'):
+        initial_forces = calculate_forces(positions, masses, G=G, epsilon=1e-3)
+        initial_acceleration = initial_forces / masses[:, np.newaxis]
+        velocities += initial_acceleration * (dt / 2.0)
 
     if animate and not MATPLOTLIB_AVAILABLE:
         print("Error: matplotlib is required for animation. Install with: pip install matplotlib")
@@ -164,15 +183,15 @@ if __name__ == "__main__":
     parser.add_argument('--kernel', type=str, required=True, 
                         choices=['numpy', 'numba_serial', 'numba_parallel', 'barnes_hut', 'cuda_bh', 'cuda_full_bh'],
                         help='The computational kernel to use.')
-    parser.add_argument('--particles', type=int, default=1000, 
+    parser.add_argument('--particles', type=int, default=5000, 
                         help='Number of particles to simulate.')
-    parser.add_argument('--steps', type=int, default=20, 
+    parser.add_argument('--steps', type=int, default=1000, 
                         help='Number of simulation steps to run.')
     parser.add_argument('--G', type=float, default=1e-4,
                         help='Gravitational constant.')
-    parser.add_argument('--rotation', type=float, default=0.0,
+    parser.add_argument('--rotation', type=float, default=1.0,
                         help='Rotation factor for the Plummer model.')
-    parser.add_argument('--init-method', type=str, default='random',
+    parser.add_argument('--init-method', type=str, default='plummer',
                         choices=['random', 'plummer'],
                         help='Method for initializing particle positions and velocities.')
     parser.add_argument('--animate', action='store_true',
@@ -181,13 +200,13 @@ if __name__ == "__main__":
     # Visualization parameters
     parser.add_argument('--particle-size', type=float, default=0.5,
                         help='Size of particles in the animation.')
-    parser.add_argument('--particle-alpha', type=float, default=0.7,
+    parser.add_argument('--particle-alpha', type=float, default=0.15,
                         help='Opacity of particles in the animation.')
 
     # Simulation parameters
-    parser.add_argument('--dt', type=float, default=0.01,
+    parser.add_argument('--dt', type=float, default=2.0,
                         help='Time step for the simulation.')
-    parser.add_argument('--scale-radius', type=float, default=1.0,
+    parser.add_argument('--scale-radius', type=float, default=0.1,
                         help='Scale radius for the Plummer model.')
     
     args = parser.parse_args()

@@ -21,21 +21,30 @@ All simulations are run from the command line using `benchmark.py`. The key opti
 # Run with the basic NumPy kernel for 1000 particles
 python benchmark.py --kernel numpy --particles 1000 --steps 20
 
-# Run with the Numba serial-optimized kernel
-python benchmark.py --kernel numba_serial --particles 1000 --steps 20
-
 # Run with the Numba parallel-optimized kernel
-python benchmark.py --kernel numba_parallel --particles 1000 --steps 20
+python benchmark.py --kernel numba_parallel --particles 10000 --steps 20
 
-# Run with the advanced Barnes-Hut algorithm for a large number of particles
-python benchmark.py --kernel barnes_hut --particles 20000 --steps 20
+# Run with the advanced Barnes-Hut algorithm
+python benchmark.py --kernel barnes_hut --particles 50000 --steps 20
 
 # Run with the hybrid CPU/GPU Barnes-Hut kernel
-python benchmark.py --kernel cuda_bh --particles 50000 --steps 20
+python benchmark.py --kernel cuda_bh --particles 100000 --steps 20
 
-# Run with animation (best with fewer particles to see movement)
-python benchmark.py --kernel barnes_hut --particles 500 --steps 100 --animate
+# Run with the fully GPU-resident Barnes-Hut kernel for a massive simulation
+python benchmark.py --kernel cuda_full_bh --particles 1000000 --steps 20
 ```
+
+---
+
+## Performance Results
+
+The following table shows the average time per step for a simulation with **1 million particles**, demonstrating the effectiveness of each optimization stage.
+
+| Kernel | Description | Avg. Time per Step | Speedup (vs. CPU BH) |
+| :--- | :--- | :---: | :---: |
+| `barnes_hut` | Parallel CPU (Numba) | ~12.06 s | 1x |
+| `cuda_bh` | Hybrid (CPU Tree + GPU Force) | ~2.79 s | **4.3x** |
+| `cuda_full_bh` | Full GPU (GPU Tree + GPU Force) | **~0.03 s** | **~400x** |
 
 ---
 
@@ -46,34 +55,35 @@ This section provides a narrative that can be used for a tutorial presentation, 
 ### Part 1: The Baseline - `numpy`
 
 *   **Kernel:** `kernels/numpy_kernel.py`
-*   **Concept:** This is our starting point. It uses the `NumPy` library, the foundation of scientific computing in Python. The force calculation is "vectorized," meaning we perform operations on entire arrays at once, avoiding slow, explicit `for` loops in Python.
-*   **Demonstration:** Run with a moderate number of particles (`--particles 1000`). It's reasonably fast, but as you increase the particle count, its O(n²) complexity becomes apparent. The runtime will increase quadratically with the number of particles.
+*   **Concept:** This is our starting point. It uses `NumPy` for "vectorized" calculations, avoiding slow Python loops.
+*   **Demonstration:** Fast for a small number of particles, but its O(n²) complexity makes it slow for large simulations.
 
 ### Part 2: Easy Speed - `numba_serial`
 
 *   **Kernel:** `kernels/numba_serial_kernel.py`
-*   **Concept:** What if we need more performance but want to write simple, clear `for` loops? This is where `Numba` comes in. This kernel uses explicit `for` loops, which are typically slow in Python. However, by adding the `@njit` (nopython JIT) decorator, Numba compiles this Python code into highly optimized, C-like machine code just before it runs.
-*   **Demonstration:** Compare `numba_serial` to `numpy` with the same particle count. You'll often find that Numba's JIT-compiled loops can be even faster than NumPy's generalized vectorized operations for this specific problem.
+*   **Concept:** Uses Numba's `@njit` decorator to compile simple Python `for` loops into highly optimized machine code.
+*   **Demonstration:** Often faster than NumPy for this specific problem, showing the power of Just-in-Time (JIT) compilation.
 
 ### Part 3: Unlocking Your CPU - `numba_parallel`
 
 *   **Kernel:** `kernels/numba_parallel_kernel.py`
-*   **Concept:** Modern CPUs have multiple cores, but standard Python code only uses one. Numba makes it trivial to unlock this power. By simply adding `parallel=True` to the decorator (`@njit(parallel=True)`) and changing `range` to `prange`, Numba automatically parallelizes the outer loop across all available CPU cores.
-*   **Demonstration:** Run `numba_parallel` and compare it to `numba_serial` with a high particle count (e.g., `--particles 5000`). The speedup should be significant, often scaling with the number of physical cores in the machine. This demonstrates the power of data parallelism.
+*   **Concept:** Trivial to implement with Numba (`parallel=True` and `prange`), this kernel utilizes all available CPU cores.
+*   **Demonstration:** Shows a significant speedup over the serial version, demonstrating the power of data parallelism on a multi-core CPU.
 
 ### Part 4: A Smarter Algorithm - `barnes_hut`
 
 *   **Kernel:** `kernels/barnes_hut_kernel.py`
-*   **Concept:** So far, we've only optimized *how* we do the calculation. Now, we change *what* we calculate. The previous kernels were all O(n²), calculating every single particle-particle interaction. The Barnes-Hut algorithm is a more intelligent, O(n log n) approximation. It groups distant particles into clusters and treats them as a single "macro-particle," saving enormous amounts of computation.
-*   **Demonstration:** This is the key takeaway.
-    1.  Run `numba_parallel` and `barnes_hut` with a small number of particles (`--particles 1000`). Observe that **Barnes-Hut is slower**. The overhead of building its octree data structure isn't worth it for small `n`.
-    2.  Now, run both kernels with a large number of particles (`--particles 20000`). Observe that **Barnes-Hut is now significantly faster**. This perfectly illustrates the concept of algorithmic complexity and crossover points in performance. It's the most powerful optimization we've made.
+*   **Concept:** Changes *what* we calculate. The Barnes-Hut algorithm is an O(n log n) approximation that groups distant particles, saving enormous amounts of computation compared to the O(n²) direct-force method.
+*   **Demonstration:** Illustrates the power of algorithmic complexity. While slower for small `n` due to tree-building overhead, it is dramatically faster for large `n`.
 
 ### Part 5: Hybrid Computing - `cuda_bh`
 
 *   **Kernel:** `kernels/cuda_bh_kernel.py`
-*   **Concept:** This kernel introduces a powerful, real-world HPC concept: **hybrid computing**. Not all parts of a problem are suited for the same processor. Here, we use a hybrid strategy that leverages the strengths of both the CPU and the GPU.
-    *   The complex, sequential task of building the Barnes-Hut octree remains on the **CPU**, where its branching logic is handled efficiently by Numba's JIT compiler.
-    *   The massively parallel task of calculating the forces on thousands of particles is offloaded to the **GPU**. We use Numba's CUDA backend to write a GPU kernel that calculates the force for every particle simultaneously.
-*   **Demonstration:** Run `numba_parallel` and `cuda_bh` with a very large number of particles (`--particles 50000`). The CPU is still doing the smart algorithmic work of building the tree, but the GPU is crushing the number-crunching part of the force calculation. This demonstrates how to use the right tool for the right job to achieve performance that neither the CPU nor the GPU could manage alone.
+*   **Concept:** Introduces a hybrid CPU/GPU strategy. The complex, serial-logic task of building the octree remains on the CPU, while the massively parallel task of force calculation is offloaded to the GPU.
+*   **Demonstration:** Shows a significant performance leap by using the right tool for the right job, but reveals that the CPU tree-build is now the primary bottleneck.
 
+### Part 6: The Summit - `cuda_full_bh`
+
+*   **Kernel:** `kernels/cuda_full_bh_kernel.py`
+*   **Concept:** The culmination of our optimization efforts. The entire simulation pipeline—Morton coding, sorting, parallel tree construction, and force calculation—is performed entirely on the GPU. This eliminates the CPU bottleneck and minimizes data transfer between the CPU and GPU.
+*   **Demonstration:** The performance results speak for themselves. By moving the entire workload to the GPU, we achieve a **~93x speedup** over the hybrid kernel and a **~400x speedup** over the highly optimized parallel CPU version for a 1-million-particle simulation, effectively utilizing the massive parallelism of the hardware.
