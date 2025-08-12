@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import time
 import argparse
 import numpy as np
@@ -155,6 +157,12 @@ def main(args):
             args.particles, scale_radius=args.scale_radius, G=args.G, 
             rotation_factor=args.rotation, dtype=dtype, seed=args.seed
         )
+    elif is_gpu_kernel and args.init_method == 'grid':
+        print("Initializing grid directly on the GPU...")
+        from init.cuda import initialize_grid_gpu
+        positions, velocities, masses = initialize_grid_gpu(
+            args.particles, spacing=args.spacing, total_mass=1.0, dtype=dtype
+        )
     else:
         print(f"Initializing {args.particles} particles using '{args.init_method}' method on CPU...")
         if args.init_method == 'random':
@@ -168,6 +176,11 @@ def main(args):
             positions, velocities, masses = initialize_plummer(
                 args.particles, scale_radius=args.scale_radius, G=args.G, 
                 rotation_factor=args.rotation, dtype=dtype, seed=args.seed
+            )
+        elif args.init_method == 'grid':
+            from init.cpu import initialize_grid
+            positions, velocities, masses = initialize_grid(
+                args.particles, spacing=args.spacing, total_mass=1.0, dtype=dtype
             )
         else:
             raise ValueError(f"Unknown initialization method: {args.init_method}")
@@ -219,6 +232,17 @@ def main(args):
             print(f"Saving debug output to {debug_filename}...")
             np.save(debug_filename, debug_to_save)
 
+    if args.save_tree:
+        if 'tree_data' in all_results[-1]:
+            tree_data = all_results[-1]['tree_data']
+            print(f"Saving tree data to prefix: {args.save_tree}...")
+            for name, data in tree_data.items():
+                data_to_save = data.get() if isinstance(data, cp.ndarray) else data
+                filename = f"{args.save_tree}_{name}.npy"
+                np.save(filename, data_to_save)
+        else:
+            print("Warning: --save-tree specified, but kernel did not return tree_data.")
+
 
     print("Simulation finished.")
 
@@ -229,7 +253,7 @@ if __name__ == "__main__":
                         help='The computational kernel to use.')
     parser.add_argument('--particles', type=int, default=5000, help='Number of particles.')
     parser.add_argument('--steps', type=int, default=5, help='Number of simulation steps.')
-    parser.add_argument('--init-method', type=str, default='plummer', choices=['random', 'plummer'], help='Particle initialization method.')
+    parser.add_argument('--init-method', type=str, default='plummer', choices=['random', 'plummer', 'grid'], help='Particle initialization method.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for particle initialization.')
     parser.add_argument('--animate', action='store_true', help='Enable real-time animation.')
     parser.add_argument('--precision', type=str, default='64', choices=['32', '64'], help='Floating point precision (32 or 64 bit).')
@@ -238,6 +262,7 @@ if __name__ == "__main__":
     parser.add_argument('--dt', type=float, default=0.01, help='Time step for the simulation.')
     parser.add_argument('--rotation', type=float, default=0.0, help='Rotation factor for Plummer model.')
     parser.add_argument('--scale-radius', type=float, default=1.0, help='Scale radius for Plummer model.')
+    parser.add_argument('--spacing', type=float, default=1.0, help='Spacing for grid initialization.')
     parser.add_argument('--theta', type=float, default=0.5, help='Theta value for Barnes-Hut.')
     parser.add_argument('--debug-particle-idx', type=int, default=-1, help='Index of the particle to debug.')
 
@@ -247,6 +272,7 @@ if __name__ == "__main__":
     parser.add_argument('--save-initial-conditions', type=str, default=None, help='Save the initial particle conditions to the specified file path prefix (e.g., "initial_conditions").')
     parser.add_argument('--load-initial-conditions', type=str, default=None, help='Load the initial particle conditions from the specified file path prefix (e.g., "initial_conditions").')
     parser.add_argument('--save-forces', type=str, default=None, help='Save the final force array to the specified .npy file.')
+    parser.add_argument('--save-tree', type=str, default=None, help='Save the final tree data structures to the specified path prefix.')
 
     args = parser.parse_args()
     main(args)

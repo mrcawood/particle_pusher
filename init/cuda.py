@@ -79,3 +79,43 @@ def initialize_plummer_gpu(num_particles, scale_radius, G, rotation_factor, dtyp
     d_masses.fill(1.0 / num_particles)
 
     return d_positions, d_velocities, d_masses
+
+@cuda.jit
+def _grid_kernel(positions, spacing, side_len):
+    """
+    CUDA kernel to generate grid positions in parallel.
+    """
+    i = cuda.grid(1)
+    if i >= positions.shape[0]:
+        return
+
+    # De-linearize the 1D index to 3D grid coordinates
+    z = i // (side_len * side_len)
+    xy_rem = i % (side_len * side_len)
+    y = xy_rem // side_len
+    x = xy_rem % side_len
+
+    positions[i, 0] = (x - side_len / 2 + 0.5) * spacing
+    positions[i, 1] = (y - side_len / 2 + 0.5) * spacing
+    positions[i, 2] = (z - side_len / 2 + 0.5) * spacing
+
+def initialize_grid_gpu(num_particles, spacing=1.0, total_mass=1.0, dtype=cp.float64):
+    """
+    Generates particles on the GPU arranged in a 3D grid.
+    """
+    side_len = int(cp.ceil(num_particles**(1/3.0)))
+
+    d_positions = cp.empty((num_particles, 3), dtype=dtype)
+    d_velocities = cp.zeros((num_particles, 3), dtype=dtype)
+    d_masses = cp.full(num_particles, total_mass / num_particles, dtype=dtype)
+    
+    threads_per_block = 256
+    blocks_per_grid = (num_particles + (threads_per_block - 1)) // threads_per_block
+
+    _grid_kernel[blocks_per_grid, threads_per_block](d_positions, spacing, side_len)
+    
+    # Center the system on the GPU
+    mean_pos = cp.mean(d_positions, axis=0)
+    d_positions -= mean_pos
+
+    return d_positions, d_velocities, d_masses

@@ -79,3 +79,39 @@ def initialize_plummer(num_particles, scale_radius=1.0, total_mass=1.0, G=1.0, r
     velocities -= np.mean(velocities, axis=0)
 
     return positions, velocities, masses
+
+def initialize_grid(num_particles, spacing=1.0, total_mass=1.0, dtype=np.float64):
+    """
+    Generates particles arranged in a 3D grid.
+
+    Args:
+        num_particles (int): The number of particles to generate.
+        spacing (float): The distance between adjacent particles in the grid.
+        total_mass (float): The total mass of the particle system.
+        dtype (np.dtype): The data type for the arrays.
+
+    Returns:
+        tuple: A tuple containing positions, velocities, and masses arrays.
+    """
+    # Find the smallest cube that can contain num_particles
+    side_len = int(np.ceil(num_particles**(1/3.0)))
+    
+    # Create grid coordinates
+    x_coords = np.linspace(-side_len / 2 + 0.5, side_len / 2 - 0.5, side_len) * spacing
+    y_coords = np.linspace(-side_len / 2 + 0.5, side_len / 2 - 0.5, side_len) * spacing
+    z_coords = np.linspace(-side_len / 2 + 0.5, side_len / 2 - 0.5, side_len) * spacing
+    
+    xx, yy, zz = np.meshgrid(x_coords, y_coords, z_coords)
+    
+    positions = np.vstack([xx.ravel(), yy.ravel(), zz.ravel()]).T
+    
+    # Trim excess particles
+    positions = positions[:num_particles].astype(dtype)
+    
+    velocities = np.zeros_like(positions, dtype=dtype)
+    masses = np.full(num_particles, total_mass / num_particles, dtype=dtype)
+    
+    # Center the system
+    positions -= np.mean(positions, axis=0)
+    
+    return positions, velocities, masses

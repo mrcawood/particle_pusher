@@ -112,23 +112,33 @@ def _initialize_leaves_kernel(node_com, node_mass, node_bounds, sorted_particle_
 def _com_sweep_kernel(node_children, node_com, node_mass, num_particles):
     i = cuda.grid(1)
     if i >= num_particles - 1: return
+    
     total_mass, wx, wy, wz = 0.0, 0.0, 0.0, 0.0
+    
     for child_idx_in_octant in range(8):
         child = node_children[i, child_idx_in_octant]
         if child != _EMPTY:
             mass = node_mass[child]
+            
+            # This is the fix: only consider children who have valid mass.
+            # A non-leaf child's mass will be > 0 only after it has been processed.
+            is_leaf_child = child >= (num_particles - 1)
+            if not is_leaf_child and mass == 0.0:
+                continue
+
             if mass > 0:
                 total_mass += mass
                 wx += node_com[child, 0] * mass
                 wy += node_com[child, 1] * mass
                 wz += node_com[child, 2] * mass
+    
     if total_mass > 0:
         inv_mass = 1.0 / total_mass
         node_com[i, 0], node_com[i, 1], node_com[i, 2] = wx * inv_mass, wy * inv_mass, wz * inv_mass
         node_mass[i] = total_mass
 
 @cuda.jit
-def _calculate_internal_bounds_kernel(node_children, node_bounds, num_particles):
+def _calculate_internal_bounds_kernel(node_children, node_bounds, node_mass, num_particles):
     i = cuda.grid(1)
     if i >= num_particles - 1: return
 
@@ -136,12 +146,17 @@ def _calculate_internal_bounds_kernel(node_children, node_bounds, num_particles)
     min_y, max_y = 1e10, -1e10
     min_z, max_z = 1e10, -1e10
 
-    has_children = False
+    found_valid_child = False
     for child_idx_in_octant in range(8):
         child = node_children[i, child_idx_in_octant]
         if child != _EMPTY:
-            has_children = True
+            child_mass = node_mass[child]
             
+            is_leaf_child = child >= (num_particles - 1)
+            if not is_leaf_child and child_mass == 0.0:
+                continue
+
+            found_valid_child = True
             child_cx, child_cy, child_cz = node_bounds[child, 0], node_bounds[child, 1], node_bounds[child, 2]
             child_s = node_bounds[child, 3]
             
@@ -152,7 +167,7 @@ def _calculate_internal_bounds_kernel(node_children, node_bounds, num_particles)
             min_z = min(min_z, child_cz - child_s)
             max_z = max(max_z, child_cz + child_s)
 
-    if has_children:
+    if found_valid_child:
         center_x = (min_x + max_x) / 2.0
         center_y = (min_y + max_y) / 2.0
         center_z = (min_z + max_z) / 2.0
@@ -172,9 +187,6 @@ def _calculate_internal_bounds_kernel(node_children, node_bounds, num_particles)
 
 @cuda.jit(device=True)
 def _is_leaf(node_idx, node_children, num_particles):
-    # A node is a leaf if its index is in the leaf range OR if it has no children.
-    # The check for _EMPTY children is a robust way to identify leaves, especially
-    # at the bottom of the tree where an internal node might only have leaf children.
     if node_idx >= num_particles - 1:
         return True
     
@@ -187,6 +199,9 @@ def _is_leaf(node_idx, node_children, num_particles):
 def _calculate_force_on_particle_gpu(particle_idx, root_node_idx, positions, masses, G, epsilon, theta,
                                   node_children, node_com, node_mass, node_bounds, sorted_particle_indices, num_particles):
     force_x, force_y, force_z, interactions = 0.0, 0.0, 0.0, 0
+    approx_count = 0
+    max_stack_depth = 0
+    
     orig_particle_idx = sorted_particle_indices[particle_idx]
     px, py, pz = positions[orig_particle_idx, 0], positions[orig_particle_idx, 1], positions[orig_particle_idx, 2]
     
@@ -196,17 +211,16 @@ def _calculate_force_on_particle_gpu(particle_idx, root_node_idx, positions, mas
     stack_ptr += 1
 
     while stack_ptr > 0:
+        max_stack_depth = max(max_stack_depth, stack_ptr)
         stack_ptr -= 1
         node_idx = stack[stack_ptr]
         
-        # Skip empty nodes
         if node_mass[node_idx] == 0:
             continue
 
         is_leaf_node = _is_leaf(node_idx, node_children, num_particles)
         
         if is_leaf_node:
-            # Direct interaction for leaf nodes, ensuring it's not the particle itself
             if node_idx != (num_particles - 1 + particle_idx):
                 rij_x = node_com[node_idx, 0] - px
                 rij_y = node_com[node_idx, 1] - py
@@ -221,14 +235,13 @@ def _calculate_force_on_particle_gpu(particle_idx, root_node_idx, positions, mas
                 interactions += 1
             continue
 
-        # For internal nodes, apply the Barnes-Hut approximation
         s = node_bounds[node_idx, 3]
         
         rij_x, rij_y, rij_z = node_com[node_idx, 0] - px, node_com[node_idx, 1] - py, node_com[node_idx, 2] - pz
         d_sq = rij_x*rij_x + rij_y*rij_y + rij_z*rij_z
 
         if s > 0 and (s*s / d_sq) < (theta * theta):
-            # Node is far enough, approximate it as a single particle
+            approx_count += 1
             d_sq += epsilon*epsilon
             inv_d = d_sq**(-0.5)
             inv_dist_cubed = inv_d * inv_d * inv_d
@@ -238,23 +251,22 @@ def _calculate_force_on_particle_gpu(particle_idx, root_node_idx, positions, mas
             force_z += force_mag * rij_z
             interactions += 1
         else:
-            # Node is too close, traverse its children
             for i in range(8):
                 child_idx = node_children[node_idx, i]
                 if child_idx != _EMPTY and stack_ptr < 64:
                     stack[stack_ptr] = child_idx
                     stack_ptr += 1
     
-    return force_x, force_y, force_z, interactions
+    return force_x, force_y, force_z, interactions, max_stack_depth, approx_count
 
 @cuda.jit
 def _force_calculation_kernel(positions, masses, forces, G, epsilon, theta,
                             root_node_idx, node_children, node_com, node_mass, node_bounds, num_particles,
-                            sorted_particle_indices, interaction_counts):
+                            sorted_particle_indices, interaction_counts, debug_output):
     i = cuda.grid(1)
     if i >= num_particles: return
     
-    fx, fy, fz, interactions = _calculate_force_on_particle_gpu(
+    fx, fy, fz, interactions, max_stack_depth, approx_count = _calculate_force_on_particle_gpu(
         i, root_node_idx, positions, masses, G, epsilon, theta,
         node_children, node_com, node_mass, node_bounds, sorted_particle_indices, num_particles
     )
@@ -264,12 +276,11 @@ def _force_calculation_kernel(positions, masses, forces, G, epsilon, theta,
     forces[orig_particle_idx, 1] = fy
     forces[orig_particle_idx, 2] = fz
     interaction_counts[i] = interactions
+    debug_output[i, 0] = max_stack_depth
+    debug_output[i, 1] = approx_count
 
 
 def get_gflops(total_interactions, time_ms):
-    """
-    Estimates the GFLOPS for the Barnes-Hut calculation based on the actual number of interactions.
-    """
     if time_ms == 0:
         return 0.0
     
@@ -287,7 +298,6 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, dtype=np.float64,
     blocks_per_grid_particles = (num_particles + (threads_per_block - 1)) // threads_per_block
     timings = {}
 
-    # --- Stages 1 & 2: Morton Coding and Sorting ---
     start_event = cp.cuda.Event()
     end_event = cp.cuda.Event()
     
@@ -308,7 +318,6 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, dtype=np.float64,
     end_event.synchronize()
     timings["morton_sort"] = cp.cuda.get_elapsed_time(start_event, end_event)
 
-    # --- Stages 3 & 4: Build Tree Topology and Connect Children ---
     start_event.record()
     num_internal_nodes = num_particles - 1
     max_nodes = num_particles + num_internal_nodes
@@ -330,7 +339,6 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, dtype=np.float64,
     end_event.synchronize()
     timings["tree_build"] = cp.cuda.get_elapsed_time(start_event, end_event)
     
-    # --- Stage 5: Calculate Node Properties ---
     start_event.record()
     d_node_com = cp.zeros((max_nodes, 3), dtype=dtype)
     d_node_mass = cp.zeros(max_nodes, dtype=dtype)
@@ -346,23 +354,23 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, dtype=np.float64,
                 d_node_children, d_node_com, d_node_mass, num_particles
             )
             _calculate_internal_bounds_kernel[blocks_per_grid_internal, threads_per_block](
-                d_node_children, d_node_bounds, num_particles
+                d_node_children, d_node_bounds, d_node_mass, num_particles
             )
     end_event.record()
     end_event.synchronize()
     timings["com_calc"] = cp.cuda.get_elapsed_time(start_event, end_event)
 
-    # --- Stage 6: Force Calculation ---
     start_event.record()
     d_forces = cp.zeros_like(positions)
     d_interaction_counts = cp.zeros(num_particles, dtype=cp.int64)
+    d_debug_output = cp.zeros((num_particles, 2), dtype=cp.int32)
     root_nodes = cp.where(d_node_parent == _EMPTY)[0]
     root_node_idx = root_nodes[0].item() if len(root_nodes) > 0 else 0
     
     _force_calculation_kernel[blocks_per_grid_particles, threads_per_block](
         positions, masses, d_forces, G, epsilon, theta,
         root_node_idx, d_node_children, d_node_com, d_node_mass, d_node_bounds, 
-        num_particles, d_sorted_particle_indices, d_interaction_counts
+        num_particles, d_sorted_particle_indices, d_interaction_counts, d_debug_output
     )
     end_event.record()
     end_event.synchronize()
@@ -375,5 +383,11 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, dtype=np.float64,
     return {
         "forces": d_forces, 
         "timings": timings, 
-        "metrics": {"gflops": gflops}
+        "metrics": {"gflops": gflops},
+        "debug_out": d_debug_output,
+        "tree_data": {
+            "node_mass": d_node_mass,
+            "node_bounds": d_node_bounds,
+            "node_children": d_node_children
+        }
     }

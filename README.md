@@ -106,7 +106,54 @@ This section provides a narrative that can be used for a tutorial presentation, 
 
     This teaches a critical lesson: `Particle Updates/sec` tells us about our *algorithmic efficiency*, while `GFLOPS` tells us about our *hardware efficiency*. A high GFLOPS value doesn't always mean a better simulation rate if the underlying algorithm is inefficient.
 
-### Part 5: A Smarter Algorithm - `barnes_hut`
+### Part 5: The Limits of Brute Force - `cuda_brute_force`
+
+*   **Kernel:** `kernels/07_cuda_brute_force_kernel.py`
+*   **Concept:** This kernel takes the same O(N²) brute-force algorithm from the `numba_parallel` version and ports it to CUDA to run on the GPU. The goal is to see what happens when we apply massive hardware parallelism to a naive algorithm.
+*   **Demonstration:** This kernel highlights a critical distinction between raw computational throughput (GFLOPS) and true scientific progress (Particle Updates/sec). While the GPU can execute the O(N²) calculations much faster than the CPU, the underlying inefficiency of the algorithm itself imposes a severe limit on scalability.
+
+    Let's compare the `numba_parallel` (CPU) and `cuda_brute_force` (GPU) kernels at 200,000 particles:
+
+    ```bash
+    # Numba Parallel on CPU
+    --- NUMBA_PARALLEL BENCHMARK RESULTS (FP64) ---
+    Particles: 200,000
+    Average Step Time: 3498.30ms
+    Particle Updates/sec: 5.72e+04
+    Estimated GFLOPS: 114.40
+    --------------------------------------
+
+    # CUDA Brute-Force on GPU
+    --- CUDA_BRUTE_FORCE BENCHMARK RESULTS (FP64) ---
+    Particles: 200,000
+    Average Step Time: 411.77ms
+    Particle Updates/sec: 4.86e+05
+    Estimated GFLOPS: 1944.41
+    --------------------------------------
+    ```
+
+    **Observations:**
+    1.  **Hardware Throughput (`Estimated GFLOPS`):** The GPU achieves over 1900 GFLOPS, an order of magnitude higher than the multi-core CPU. This demonstrates the immense raw power of the GPU for simple, parallelizable math.
+    2.  **Algorithmic Throughput (`Particle Updates/sec`):** While the GPU is much faster, the `Particle Updates/sec` metric tells a more nuanced story. The simulation is faster, but the benefit is not as large as the GFLOPS number would suggest.
+
+    Now, let's see what happens when we increase the problem size to 1,000,000 particles for the `cuda_brute_force` kernel:
+
+    ```bash
+    --- CUDA_BRUTE_FORCE BENCHMARK RESULTS (FP64) ---
+    Particles: 1,000,000
+    Average Step Time: 9423.78ms
+    Particle Updates/sec: 1.06e+05
+    Estimated GFLOPS: 2122.37
+    --------------------------------------
+    ```
+    **Scaling Analysis:**
+    *   The particle count increased 5x (from 200k to 1M), but the workload increased by 25x (due to N² complexity).
+    *   The `Particle Updates/sec` has plummeted from `4.86e+05` down to `1.06e+05`. The simulation has become much less efficient.
+    *   The `Estimated GFLOPS` remained high, because the GPU is still busy doing work, but it's doing an enormous amount of redundant work.
+
+    This teaches a crucial lesson: **throwing more hardware at an inefficient algorithm yields diminishing returns.** The GPU is doing a phenomenal job at executing the instructions it's given, but the O(N²) algorithm is simply not a scalable solution. This provides the motivation to move beyond brute-force and explore smarter, algorithmically-efficient methods on the GPU.
+
+### Part 6: A Smarter Algorithm - `barnes_hut`
 
 *   **Kernel:** `kernels/05_barnes_hut_kernel.py`
 *   **Concept:** This marks a crucial shift from computational optimization to **algorithmic optimization**. The Barnes-Hut algorithm is an O(N log N) approximation that groups distant particles into single "macro-particles," dramatically reducing the number of required force calculations.
@@ -144,7 +191,7 @@ This section provides a narrative that can be used for a tutorial presentation, 
 
     This teaches the ultimate lesson: **`Particle Updates/sec` tells us how fast our simulation is, while `GFLOPS` tells us how busy our hardware is.** The goal of HPC is not just to keep the hardware busy, but to solve the problem efficiently. A superior algorithm that does less work is better than a brute-force algorithm that does the wrong work faster.
 
-### Part 6: Hybrid Computing - `cuda_bh`
+### Part 7: Hybrid Computing - `cuda_bh`
 
 *   **Kernel:** `kernels/06_cuda_bh_kernel.py`
 *   **Concept:** Introduces a hybrid CPU/GPU strategy. The complex, serial-style logic of building the octree remains on the CPU, while the massively parallel task of force calculation is offloaded to the GPU using CUDA.
@@ -161,13 +208,13 @@ This section provides a narrative that can be used for a tutorial presentation, 
 
     This result is a textbook example of **Amdahl's Law**. We achieved a massive speedup on the portion of our code that we parallelized, but the overall application speedup is now limited by the remaining serial components. The `Tree Build` and `COM Calc`, which were previously responsible for only a fraction of the runtime, have now become the primary performance bottleneck. This perfectly motivates the next step in the tutorial: moving the entire simulation pipeline to the GPU to eliminate these new bottlenecks.
 
-### Part 7: A Direct Approach to a GPU-Resident Tree - `cuda_ref_octree`
+### Part 8: A Direct Approach to a GPU-Resident Tree - `cuda_ref_octree`
 
 *   **Kernel:** `kernels/08_cuda_ref_octree_kernel.py`
 *   **Concept:** Following Amdahl's Law, the next logical step is to move the entire simulation to the GPU, eliminating the CPU bottlenecks and data transfer overhead. This kernel represents a direct, "lift-and-shift" approach to that problem. The tree-building logic is parallelized by launching one thread per particle, where each thread traverses the global tree structure from the root to insert itself.
 *   **Demonstration:** This implementation is a significant step forward, but it reveals a new, more subtle performance challenge: **contention**. When many particles are in the same region of space, their corresponding threads will try to modify the same nodes in the tree simultaneously. This requires expensive atomic operations and causes threads that lose the "race" to retry their insertion, leading to inefficient execution and high variance in step times. This kernel teaches a valuable lesson in parallel algorithm design: a straightforward translation of a serial algorithm to a parallel architecture can expose new bottlenecks that weren't apparent before.
 
-### Part 8: Algorithmic Refinement for the GPU - `cuda_morton_bh`
+### Part 9: Algorithmic Refinement for the GPU - `cuda_morton_bh`
 
 *   **Kernel:** `kernels/09_cuda_morton_bh_kernel.py`
 *   **Concept:** This kernel is a much more sophisticated, GPU-native implementation of the Barnes-Hut algorithm. Instead of a direct, contentious insertion, it uses a multi-stage, contention-free process:

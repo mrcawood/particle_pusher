@@ -31,8 +31,9 @@ def _get_octant(particle_pos, node_center):
     return octant
 
 @njit
-def _create_child_node(parent_node_idx, octant, next_node_idx, node_bounds):
+def _create_child_node(parent_node_idx, octant, next_node_idx, node_bounds, node_parent):
     child_node_idx = next_node_idx
+    node_parent[child_node_idx] = parent_node_idx
     px_min, px_max, py_min, py_max, pz_min, pz_max = node_bounds[parent_node_idx]
     cx, cy, cz = (px_min + px_max) / 2, (py_min + py_max) / 2, (pz_min + pz_max) / 2
     
@@ -48,7 +49,7 @@ def _create_child_node(parent_node_idx, octant, next_node_idx, node_bounds):
 
 @njit
 def _insert_particle(current_node_idx, particle_idx, next_node_idx, positions,
-                   node_bounds, node_children, node_is_leaf, leaf_particle_index):
+                   node_bounds, node_children, node_is_leaf, leaf_particle_index, node_parent):
     if not node_is_leaf[current_node_idx]:
         node_center = (node_bounds[current_node_idx, 0:2].sum() / 2,
                        node_bounds[current_node_idx, 2:4].sum() / 2,
@@ -58,13 +59,13 @@ def _insert_particle(current_node_idx, particle_idx, next_node_idx, positions,
         child_idx = node_children[current_node_idx, octant]
 
         if child_idx == _EMPTY:
-            new_child_idx = _create_child_node(current_node_idx, octant, next_node_idx, node_bounds)
+            new_child_idx = _create_child_node(current_node_idx, octant, next_node_idx, node_bounds, node_parent)
             next_node_idx += 1
             node_children[current_node_idx, octant] = new_child_idx
             node_is_leaf[new_child_idx] = True
             leaf_particle_index[new_child_idx] = particle_idx
         else:
-            next_node_idx = _insert_particle(child_idx, particle_idx, next_node_idx, positions, node_bounds, node_children, node_is_leaf, leaf_particle_index)
+            next_node_idx = _insert_particle(child_idx, particle_idx, next_node_idx, positions, node_bounds, node_children, node_is_leaf, leaf_particle_index, node_parent)
         
         return next_node_idx
 
@@ -78,13 +79,13 @@ def _insert_particle(current_node_idx, particle_idx, next_node_idx, positions,
                        node_bounds[current_node_idx, 4:6].sum() / 2)
         
         octant_old = _get_octant(positions[existing_particle_idx], node_center)
-        child_idx_old = _create_child_node(current_node_idx, octant_old, next_node_idx, node_bounds)
+        child_idx_old = _create_child_node(current_node_idx, octant_old, next_node_idx, node_bounds, node_parent)
         next_node_idx += 1
         node_children[current_node_idx, octant_old] = child_idx_old
         node_is_leaf[child_idx_old] = True
         leaf_particle_index[child_idx_old] = existing_particle_idx
         
-        next_node_idx = _insert_particle(current_node_idx, particle_idx, next_node_idx, positions, node_bounds, node_children, node_is_leaf, leaf_particle_index)
+        next_node_idx = _insert_particle(current_node_idx, particle_idx, next_node_idx, positions, node_bounds, node_children, node_is_leaf, leaf_particle_index, node_parent)
         return next_node_idx
 
 @njit
@@ -187,7 +188,7 @@ def _calculate_forces_bh_cuda(positions, masses, G, epsilon, theta, forces,
         forces[i, 2] = force_z
         d_interaction_counts[i] = interactions
 
-def calculate_forces(positions, masses, G, epsilon, theta=0.5, **kwargs):
+def calculate_forces(positions, masses, G, epsilon, theta=0.5, dtype=np.float64, debug_particle_idx=-1, debug_tree_structure=False):
     is_gpu_array = hasattr(positions, 'device')
 
     if is_gpu_array:
@@ -209,6 +210,7 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, **kwargs):
     node_children = np.full((max_nodes, 8), _EMPTY, dtype=np.int32)
     node_is_leaf = np.zeros(max_nodes, dtype=np.bool_)
     leaf_particle_index = np.full(max_nodes, _EMPTY, dtype=np.int32)
+    node_parent = np.full(max_nodes, _EMPTY, dtype=np.int32)
     
     min_pos = np.min(positions_host, axis=0); max_pos = np.max(positions_host, axis=0)
     box_center = (min_pos + max_pos) / 2.0
@@ -219,6 +221,7 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, **kwargs):
                       box_center[2] - half_size, box_center[2] + half_size]
     
     root_node_idx = 0
+    node_parent[root_node_idx] = _EMPTY  # Explicitly set root's parent
     node_is_leaf[root_node_idx] = True
     if num_particles > 0:
         leaf_particle_index[root_node_idx] = 0
@@ -227,7 +230,7 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, **kwargs):
     for i in range(1, num_particles):
         next_node_idx = _insert_particle(
             root_node_idx, i, next_node_idx, positions_host, node_bounds,
-            node_children, node_is_leaf, leaf_particle_index
+            node_children, node_is_leaf, leaf_particle_index, node_parent
         )
     t1 = time.time()
 
@@ -277,8 +280,24 @@ def calculate_forces(positions, masses, G, epsilon, theta=0.5, **kwargs):
         "force_calculation": force_time_ms
     }
 
-    return {
+    result = {
         "forces": forces,
         "timings": timings,
         "metrics": {"gflops": gflops}
     }
+    
+    if debug_particle_idx != -1:
+        result["debug_force"] = _calculate_force_on_particle_cuda(
+            debug_particle_idx, 0, d_positions, d_masses, G, epsilon, theta,
+            d_node_bounds, d_node_center_of_mass, d_node_total_mass,
+            d_node_children, d_node_is_leaf, d_leaf_particle_index
+        )
+    
+    if debug_tree_structure:
+        result["tree_data"] = {
+            "node_parent": cp.asarray(node_parent),
+            "node_children": cp.asarray(node_children),
+            "next_node_idx": next_node_idx
+        }
+
+    return result
